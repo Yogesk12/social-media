@@ -10,24 +10,22 @@ export const authMiddleware = (req,res,next) => {
             })
         }
 
-        const token = authorization.startsWith("Bearer") ? authorization.split(" ")[1] : null;
+        const token = authorization.startsWith("Bearer ") ? authorization.slice(7) : null;
 
         if(!token){
-            return res.send({
+            return res.status(401).send({
                 statusCode : 401,
                 message : "Invalid authorization token"
             })
         }
 
         const decodedToken = jwt.verify(token,process.env.JWT_SECRET);
-        console.log("decodedtoek----------",decodedToken)
-        // req.userId = 
+        req.userId = decodedToken.userId;
         next();
 
     }catch(err){
-        console.log("err----------",err)
-        res.send({
-            stausCode : 401,
+        res.status(401).send({
+            statusCode : 401,
             message : "Invalid or expired token"
         })
     }

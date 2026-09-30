@@ -1,28 +1,6 @@
-export const getCurrentUser = async(req,res) => {
-    try{
-        let userId = req.userId
-        const user = await user.findById(userId)
-
-        if(!user){
-            return res.send({
-                statusCode : 401,
-                message : "user not found"
-            })
-        }
-
-
-        res.send({
-            statusCode : 200,
-            user : {
-                id : user._id,
-                name : user.name,
-                email : user.email
-            }
-        })
-    }catch(err){
-        console.log("err------",err)
-        res.send({
-            statusCode : 500,
-            message : "Internal server error"
-        })
-    }}
+import User from "../models/user.js";
+export const getCurrentUser = async (req, res) => {
+  const user = await User.findById(req.userId).select("name email");
+  if (!user) return res.status(404).json({ message: "User not found" });
+  return res.json({ user: { id: user._id, name: user.name, email: user.email } });
+};

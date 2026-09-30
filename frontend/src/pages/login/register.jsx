@@ -1,63 +1,16 @@
-import React, {useState} from "react";
-import {useNavigate} from "react-router-dom"
-import axios from "axios"
+import { useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { api } from "../../services/api.js";
+import { encryptPassword } from "../../services/passwordCrypto.js";
 
-export default function Register(){
-    const navigate = useNavigate();
-    const [userDetails, SetUserDetails] = useState({
-        name : "",
-        password : "",
-        email : ""
-    })
-    const [errorMsg,setErrorMsg] = useState("")
-    
-
-    const handleInputEvents = (data) => {
-        console.log("data---------",data)
-        SetUserDetails((prev) => ({...prev,[data.name]: data.value}))
-    }
-
-    const handleSubmit = async() => {
-        try{
-            console.log("register-------",userDetails)
-            let payload = {
-                "name" : userDetails.name,
-                "email" : userDetails.email,
-                "password" : userDetails.password
-
-            }
-            console.log("payload----",payload)
-            let userResp = await axios.post("http://localhost:4000/api/auth/register",payload)
-
-            console.log("userDetails--------",userResp)
-            if(userResp.data.user){
-                navigate("/login")
-            }else{
-                console.log("yes---")
-                setErrorMsg(userResp.data.message)
-            }
-
-        }catch(err){
-            console.log("err-------------",err)
-            setErrorMsg("Sorry try again later")
-        }
-        
-    }
-
-    return(
-        <>
-            <h1>ddddd</h1>
-            <input type="text" placeholder="Name" name="name" value={userDetails.name} onChange={(e) => handleInputEvents(e.target)} required/>
-             <input type="text" placeholder="Email" name="email" value={userDetails?.email} onChange={(e) => handleInputEvents(e.target)} required/>
-             <input type="password" placeholder="Password" name="password" value={userDetails.password} onChange={(e) => handleInputEvents(e.target)} required/>
-
-             <button onClick={handleSubmit}>Register</button>
-             <p onClick={() => navigate("/login")}>Already have an account</p>
-             <span>{errorMsg}</span>
-        </>
-    )
+export default function Register() {
+  const navigate = useNavigate(); const [form, setForm] = useState({ name: "", email: "", password: "" });
+  const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
+  const submit = async event => {
+    event.preventDefault(); setError(""); setBusy(true);
+    try { await api.post("/auth/signup", { ...form, password: await encryptPassword(form.password) }); navigate("/login", { state: { created: true } }); }
+    catch (err) { setError(err.response?.data?.message || err.message || "Unable to create your account."); }
+    finally { setBusy(false); }
+  };
+  return <main className="auth-page"><section className="auth-card"><Link className="brand-mark" to="/login">S</Link><p className="eyebrow">COME ON IN</p><h1>Make yourself at home.</h1><p className="muted">A good place for the things you want to remember.</p><form onSubmit={submit} className="auth-form"><label>Your name<input autoComplete="name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} required maxLength={80}/></label><label>Email address<input type="email" autoComplete="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} required/></label><label>Password<input type="password" autoComplete="new-password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} minLength={8} required/></label>{error && <p className="error-message">{error}</p>}<button className="primary-button" disabled={busy}>{busy ? "Creating account…" : "Create account"}</button></form><p className="auth-switch">Already a member? <Link to="/login">Sign in</Link></p></section><aside className="auth-art"><div className="art-orbit orbit-one"/><div className="art-orbit orbit-two"/><div className="art-note">✿</div><p>Find your people.<br/><em>Keep the good bits.</em></p><span>A SMALL SPACE TO SHARE</span></aside></main>;
 }
-
-
-
-

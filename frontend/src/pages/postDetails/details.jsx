@@ -1,9 +1,54 @@
-import React from "react";
+import { useCallback, useEffect, useState } from "react";
+import { io as createSocket } from "socket.io-client";
+import { api } from "../../services/api.js";
+import { localStorageGetItem } from "../../utils/storage.js";
 
-export default function PostDetails(){
-    return(
-        <>
-            <h1> yes logged in</h1>
-        </>
-    )
+const asset = url => url?.startsWith("http") ? url : `${import.meta.env.VITE_ASSET_URL || "http://localhost:4000"}${url}`;
+const timeAgo = value => { const mins = Math.max(1, Math.floor((Date.now() - new Date(value)) / 60000)); return mins < 60 ? `${mins}m ago` : mins < 1440 ? `${Math.floor(mins / 60)}h ago` : `${Math.floor(mins / 1440)}d ago`; };
+const todayLabel = new Intl.DateTimeFormat("en", { weekday: "long", month: "long", day: "numeric" }).format(new Date()).toUpperCase();
+
+export default function PostDetails() {
+  const [user, setUser] = useState(null); const [posts, setPosts] = useState([]); const [page, setPage] = useState(1); const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true); const [moreLoading, setMoreLoading] = useState(false); const [error, setError] = useState("");
+  const [caption, setCaption] = useState(""); const [image, setImage] = useState(null); const [preview, setPreview] = useState(""); const [uploading, setUploading] = useState(false);
+  const [active, setActive] = useState(null); const [comments, setComments] = useState([]); const [commentText, setCommentText] = useState(""); const [editing, setEditing] = useState(""); const [editCaption, setEditCaption] = useState(""); const [notice, setNotice] = useState("");
+  const refreshPost = useCallback(async id => { const { data } = await api.get(`/posts/${id}`); setActive(data.post); setComments(data.comments); }, []);
+
+  useEffect(() => { api.get("/auth/me").then(({ data }) => setUser(data.user)).catch(() => { localStorage.removeItem("TOKEN"); window.location.assign("/login"); }); }, []);
+  const loadPage = useCallback(async (nextPage, append = false) => {
+    append ? setMoreLoading(true) : setLoading(true); setError("");
+    try { const { data } = await api.get(`/posts?page=${nextPage}&limit=8`); setPosts(old => append ? [...old, ...data.data] : data.data); setTotal(data.total); setPage(nextPage); }
+    catch (err) { setError(err.response?.data?.message || "Could not load the feed. Please try again."); }
+    finally { setLoading(false); setMoreLoading(false); }
+  }, []);
+  useEffect(() => { loadPage(1); }, [loadPage]);
+
+  useEffect(() => {
+    if (!active) return undefined;
+    const socket = createSocket(import.meta.env.VITE_SOCKET_URL || "http://localhost:4000", { auth: { token: localStorageGetItem("TOKEN") } });
+    socket.emit("post:join", { postId: active.id });
+    socket.on("comment:new", ({ postId, comment }) => { if (postId !== active.id) return; setComments(list => list.some(item => item.id === comment.id) ? list : [...list, comment]); setActive(post => post?.id === postId ? { ...post, commentCount: post.commentCount + 1 } : post); setPosts(list => list.map(post => post.id === postId ? { ...post, commentCount: post.commentCount + 1 } : post)); });
+    socket.on("comment:deleted", ({ postId, commentId }) => { if (postId !== active.id) return; setComments(list => list.filter(comment => comment.id !== commentId)); setActive(post => post?.id === postId ? { ...post, commentCount: Math.max(0, post.commentCount - 1) } : post); setPosts(list => list.map(post => post.id === postId ? { ...post, commentCount: Math.max(0, post.commentCount - 1) } : post)); });
+    return () => { socket.emit("post:leave", { postId: active.id }); socket.disconnect(); };
+  }, [active?.id]);
+
+  const selectImage = file => { setNotice(""); if (!file) return; if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) { setNotice("Choose a JPG, PNG or WEBP image."); return; } if (file.size > 2 * 1024 * 1024) { setNotice("That image is larger than 2 MB."); return; } setImage(file); setPreview(URL.createObjectURL(file)); };
+  const createPost = async event => { event.preventDefault(); if (!image) return setNotice("Choose an image to share."); if (!caption.trim()) return setNotice("Add a caption before posting."); const body = new FormData(); body.append("caption", caption); body.append("image", image); setUploading(true); setNotice(""); try { const { data } = await api.post("/posts", body, { headers: { "Content-Type": "multipart/form-data" } }); setPosts(list => [data.post, ...list]); setTotal(count => count + 1); setCaption(""); setImage(null); setPreview(""); } catch (err) { setNotice(err.response?.data?.message || "Your post could not be uploaded."); } finally { setUploading(false); } };
+  const openPost = async post => { setActive(post); setComments([]); try { await refreshPost(post.id); } catch (err) { setError(err.response?.data?.message || "Could not load this post."); } };
+  const sendComment = async event => { event.preventDefault(); const text = commentText.trim(); if (!text || !active) return; try { const { data } = await api.post(`/posts/${active.id}/comments`, { text }); setComments(list => list.some(c => c.id === data.comment.id) ? list : [...list, data.comment]); setCommentText(""); } catch (err) { setError(err.response?.data?.message || "Could not send comment."); } };
+  const removeComment = async id => { try { await api.delete(`/comments/${id}`); setComments(list => list.filter(c => c.id !== id)); } catch (err) { setError(err.response?.data?.message || "Could not delete comment."); } };
+  const removePost = async post => { if (!window.confirm("Delete this post and all its comments?")) return; try { await api.delete(`/posts/${post.id}`); setPosts(list => list.filter(item => item.id !== post.id)); setTotal(count => Math.max(0, count - 1)); if (active?.id === post.id) setActive(null); } catch (err) { setError(err.response?.data?.message || "Could not delete post."); } };
+  const saveCaption = async post => { try { const { data } = await api.patch(`/posts/${post.id}`, { caption: editCaption }); setPosts(list => list.map(item => item.id === post.id ? data.post : item)); if (active?.id === post.id) setActive(data.post); setEditing(""); } catch (err) { setError(err.response?.data?.message || "Could not update caption."); } };
+  const logout = () => { localStorage.removeItem("TOKEN"); setActive(null); window.location.assign("/login"); };
+
+  return <div className="feed-shell"><header className="topbar"><a className="wordmark" href="/feed"><span>S</span> little things</a><div className="topbar-right"><span className="welcome">A little hello, <b>{user?.name || "friend"}</b></span><button className="logout-button" onClick={logout}>Log out <span>↗</span></button></div></header>
+    <main className="feed-main"><section className="feed-heading"><div><p className="eyebrow">{todayLabel}</p><h1>Your people, <em>in the moment.</em></h1><p className="muted">A small feed for the things worth sharing.</p></div><span className="sun-doodle">✳</span></section>
+      <section className="composer"><div className="composer-avatar">{user?.name?.[0]?.toUpperCase() || "Y"}</div><form onSubmit={createPost} className="composer-form"><textarea aria-label="Write a caption" placeholder="What would you like to share today?" value={caption} onChange={e => setCaption(e.target.value)} maxLength={500}/><div className="composer-bottom">{preview ? <div className="preview-wrap"><img src={preview} alt="Selected image preview"/><button type="button" onClick={() => { setImage(null); setPreview(""); }}>Remove</button></div> : <label className="image-picker">＋ <span>Add a photo</span><input type="file" accept="image/jpeg,image/png,image/webp" onChange={e => selectImage(e.target.files?.[0])}/></label>}<div className="composer-actions"><span>{caption.length}/500</span><button className="primary-button post-button" disabled={uploading}>{uploading ? "Sharing…" : "Share post ↗"}</button></div></div>{notice && <p className="error-message">{notice}</p>}</form></section>
+      <div className="section-label"><span>THE LATEST</span><span>{total} {total === 1 ? "POST" : "POSTS"}</span></div>{error && <p className="error-message feed-error">{error}</p>}
+      {loading ? <div className="state-card">Gathering the good things…</div> : posts.length === 0 ? <div className="state-card"><div className="empty-flower">✿</div><h2>No posts yet</h2><p>Be the first to share a little moment.</p></div> : <div className="post-grid">{posts.map(post => <article className="post-card" key={post.id}><button className="post-image-button" onClick={() => openPost(post)} aria-label={`Open post by ${post.author?.name}`}><img src={asset(post.imageUrl)} alt={post.caption}/><span className="image-open">View post ↗</span></button><div className="post-content"><div className="post-meta"><div className="tiny-avatar">{post.author?.name?.[0]?.toUpperCase()}</div><div><b>{post.author?.name}</b><span>{timeAgo(post.createdAt)}</span></div><span className="post-spark">✳</span></div>{editing === post.id ? <div className="edit-row"><input value={editCaption} onChange={e => setEditCaption(e.target.value)} maxLength={500}/><button onClick={() => saveCaption(post)}>Save</button><button onClick={() => setEditing("")}>Cancel</button></div> : <button className="caption-button" onClick={() => openPost(post)}>{post.caption}</button>}<div className="card-footer"><button onClick={() => openPost(post)}>♡ <span>{post.commentCount} {post.commentCount === 1 ? "comment" : "comments"}</span></button>{post.author?.id === user?.id && <div className="owner-actions"><button onClick={() => { setEditing(post.id); setEditCaption(post.caption); }}>Edit</button><button onClick={() => removePost(post)}>Delete</button></div>}</div></div></article>)}</div>}
+      {!loading && posts.length > 0 && posts.length < total && <button className="load-more" disabled={moreLoading} onClick={() => loadPage(page + 1, true)}>{moreLoading ? "Loading…" : "A little more ↓"}</button>}
+      <footer className="feed-footer">MADE FOR THE MOMENTS THAT MATTER <span>✳</span></footer>
+    </main>
+    {active && <div className="modal-backdrop" role="presentation" onMouseDown={event => event.target === event.currentTarget && setActive(null)}><section className="detail-modal" role="dialog" aria-modal="true" aria-label="Post details"><button className="modal-close" onClick={() => setActive(null)} aria-label="Close">×</button><div className="detail-image"><img src={asset(active.imageUrl)} alt={active.caption}/></div><div className="detail-panel"><div className="detail-author"><div className="tiny-avatar">{active.author?.name?.[0]?.toUpperCase()}</div><div><b>{active.author?.name}</b><span>{timeAgo(active.createdAt)}</span></div></div><p className="detail-caption">{active.caption}</p><div className="comments-heading">THE CONVERSATION <span>{comments.length}</span></div><div className="comments-list">{comments.length ? comments.map(comment => <div className="comment-row" key={comment.id}><div className="tiny-avatar">{comment.author?.name?.[0]?.toUpperCase()}</div><div className="comment-body"><p><b>{comment.author?.name}</b> {comment.text}</p><span>{timeAgo(comment.createdAt)}</span></div>{comment.author?.id === user?.id && <button className="comment-delete" onClick={() => removeComment(comment.id)} aria-label="Delete your comment">×</button>}</div>) : <p className="no-comments">No comments yet. Say hello.</p>}</div><form className="comment-form" onSubmit={sendComment}><input placeholder="Add to the conversation…" value={commentText} onChange={e => setCommentText(e.target.value)} maxLength={300}/><button disabled={!commentText.trim()} aria-label="Send comment">↑</button></form></div></section></div>}
+  </div>;
 }
